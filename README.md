@@ -36,3 +36,4 @@ This is Beta 0.5, so more features (like custom links and per-widget opacity) ar
 I'd love to hear what you think! Drop your feedback, bug reports, or feature requests in this thread or send me a PM.
 
 [Link to ZIP file]
+"# Torn-Rainmeter-HUD-OverTorn-" 
