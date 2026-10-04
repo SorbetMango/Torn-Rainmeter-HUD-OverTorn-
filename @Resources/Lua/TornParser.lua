@@ -1,0 +1,323 @@
+ÿþ-- ============================================================
+--  Obsidian Torn HUD — v0.5 Beta
+--  Author : Sorbita_Mango
+--  License: Free to use and modify. Credit appreciated.
+-- ============================================================
+local json = nil
+local webParserMeasure = nil
+local webParserFaction = nil
+local lastJson = ""
+local lastFacJson = ""
+local fetchTime = 0
+local dataReady = false
+local api = {}
+
+function Initialize()
+    local luaDir = SKIN:GetVariable('@') .. 'Lua\\'
+    json = dofile(luaDir .. 'json.lua')
+    webParserMeasure = SKIN:GetMeasure('MeasureTornAPI')
+    webParserFaction = SKIN:GetMeasure('MeasureFactionAPI')
+end
+
+function FormatTimeDHMS(seconds)
+    if seconds <= 0 then return "00:00" end
+    local d = math.floor(seconds / 86400)
+    local rem = seconds % 86400
+    local h = math.floor(rem / 3600)
+    local m = math.floor((rem % 3600) / 60)
+    local s = rem % 60
+    if d > 0 then
+        return string.format("%dd %02dh %02dm", d, h, m)
+    elseif h > 0 then
+        return string.format("%02d:%02d:%02d", h, m, s)
+    else
+        return string.format("%02d:%02d", m, s)
+    end
+end
+
+function FormatTimeHHMMSS(seconds)
+    if seconds <= 0 then return "00:00:00" end
+    local h = math.floor(seconds / 3600)
+    local m = math.floor((seconds % 3600) / 60)
+    local s = seconds % 60
+    if h > 0 then
+        return string.format("%02d:%02d:%02d", h, m, s)
+    else
+        return string.format("%02d:%02d", m, s)
+    end
+end
+
+function FormatTimeHM(seconds)
+    if seconds <= 0 then return "0m" end
+    local h = math.floor(seconds / 3600)
+    local m = math.floor((seconds % 3600) / 60)
+    if h > 0 then return h .. "h " .. m .. "m" else return m .. "m" end
+end
+
+function FormatTimeMMSS(seconds)
+    if seconds <= 0 then return "00:00" end
+    local m = math.floor(seconds / 60)
+    local s = seconds % 60
+    return string.format("%02d:%02d", m, s)
+end
+
+function Pct(cur, max)
+    if max == nil or max == 0 then return 0 end
+    return math.min(100, math.floor(((cur or 0) / max) * 100))
+end
+
+function FormatNumber(amount)
+    local formatted = tostring(amount)
+    while true do  
+        formatted, k = string.gsub(formatted, "^(-?%d+)(%d%d%d)", '%1,%2')
+        if (k==0) then break end
+    end
+    return formatted
+end
+
+function Bang(var, val)
+    SKIN:Bang('!SetVariableGroup', var, tostring(val), 'ObsidianHUD')
+end
+
+function Update()
+    if webParserMeasure == nil then return 0 end
+    local rawJson = webParserMeasure:GetStringValue()
+    if rawJson ~= nil and rawJson ~= '' and rawJson ~= lastJson then
+        lastJson = rawJson
+        ParseData(rawJson)
+    end
+
+    if webParserFaction ~= nil then
+        local rawFac = webParserFaction:GetStringValue()
+        if rawFac ~= nil and rawFac ~= '' and rawFac ~= lastFacJson then
+            lastFacJson = rawFac
+            ParseFactionData(rawFac)
+        end
+    end
+
+    if dataReady then Tick() end
+    return 0
+end
+
+function ParseFactionData(rawJson)
+    local ok, data = pcall(json.decode, rawJson)
+    if not ok or data == nil or data.error then return end
+    api.faction_id = data.ID or 0
+    api.ranked_wars = data.ranked_wars or {}
+end
+
+function ParseData(rawJson)
+    local ok, data = pcall(json.decode, rawJson)
+    if not ok or data == nil or data.error then return end
+    fetchTime = os.time()
+    dataReady = true
+    api.energy = data.energy or {}
+    api.nerve = data.nerve or {}
+    api.happy = data.happy or {}
+    api.life = data.life or {}
+    api.travel = data.travel or {}
+    api.cooldowns = data.cooldowns or {}
+    api.state = (data.status and data.status.state) or "RESTING"
+    api.state_desc = (data.status and data.status.description) or ""
+    api.state_until = (data.status and data.status['until']) or 0
+    api.money_onhand = data.money_onhand or 0
+    api.player_name = data.name or ""
+    api.player_level = tonumber(data.level) or 0
+end
+
+function Tick()
+    local elapsed = math.max(0, os.time() - fetchTime)
+    Bang('SyncAgoText', elapsed .. "s")
+
+    -- Player identity
+    Bang('PlayerName', api.player_name)
+    Bang('PlayerLevel', "Lv." .. api.player_level)
+
+    -- Cash
+    local cash = tonumber(api.money_onhand) or 0
+    Bang('CashOnHand', FormatNumber(cash))
+
+    -- Ranked War
+    local rwStart = 0
+    local rwEnd = 0
+    local ourScore = 0
+    local theirScore = 0
+    
+    if api.ranked_wars then
+        for k, v in pairs(api.ranked_wars) do
+            if type(v) == "table" and v.war then
+                rwEnd = tonumber(v.war['end']) or 0
+                if rwEnd == 0 then
+                    rwStart = tonumber(v.war.start) or 0
+                    if v.factions then
+                        for fid, fval in pairs(v.factions) do
+                            if tostring(fid) == tostring(api.faction_id) then
+                                ourScore = tonumber(fval.score) or 0
+                            else
+                                theirScore = tonumber(fval.score) or 0
+                            end
+                        end
+                    end
+                    break
+                end
+            end
+        end
+    end
+
+    if rwStart > 0 then
+        local rwLeft = rwStart - os.time()
+        if rwLeft > 0 and rwLeft <= 259200 then
+            Bang('RwText', "?? " .. FormatTimeDHMS(rwLeft))
+            Bang('DrugLink', 'https://www.torn.com/factions.php?step=your#/tab=armory')
+        elseif rwLeft <= 0 then
+            Bang('RwText', "?? " .. FormatNumber(theirScore) .. " vs " .. FormatNumber(ourScore))
+            Bang('DrugLink', 'https://www.torn.com/factions.php?step=your#/tab=armory')
+        else
+            Bang('RwText', "")
+            Bang('DrugLink', 'https://www.torn.com/item.php')
+        end
+    else
+        Bang('RwText', "")
+        Bang('DrugLink', 'https://www.torn.com/item.php')
+    end
+
+    -- Status & Travel
+        local travelLeft = 0
+    local travelTotal = 1
+    local travelPct = 0
+    local dest = "UNKNOWN"
+
+    if api.travel and api.travel.time_left then
+        travelLeft = math.max(0, tonumber(api.travel.time_left) - elapsed)
+        travelTotal = (tonumber(api.travel.timestamp) or 1) - (tonumber(api.travel.departed) or 0)
+        if travelTotal <= 0 then travelTotal = 1 end
+        travelPct = math.min(100, math.max(0, ((travelTotal - travelLeft) / travelTotal) * 100))
+        dest = api.travel.destination or "UNKNOWN"
+    end
+
+    local state = string.upper(api.state)
+    local stateUntil = tonumber(api.state_until) or 0
+    local stateLeft = math.max(0, stateUntil - os.time())
+    local isReturning = (dest == "Torn" or dest == "Torn City") and 1 or 0
+
+    if travelLeft > 0 then
+        local timeStr = FormatTimeHHMMSS(travelLeft)
+        local etaStr = os.date("%H:%M", os.time() + travelLeft)
+        Bang('StatusTitleText', "Traveling to " .. dest .. "  " .. timeStr .. " (ETA: " .. etaStr .. ")")
+        Bang('StatusFontSize', '9')
+        Bang('StatusY', '26')
+        Bang('HideTravel', '0')
+        Bang('HideNormal', '1')
+        Bang('TravelPct', travelPct)
+        Bang('TravelIsReturning', isReturning)
+        Bang('StatusTitleColor', '209,180,74,255')
+        Bang('StatusTitleWeight', '700')
+        Bang('StatusRightText', "")
+    elseif state == "HOSPITAL" and stateLeft > 0 then
+        Bang('StatusTitleText', "?? In hospital for " .. FormatTimeHHMMSS(stateLeft))
+        Bang('StatusFontSize', '11')
+        Bang('StatusY', '31')
+        Bang('HideTravel', '1')
+        Bang('HideNormal', '0')
+        Bang('TravelPct', 0)
+        Bang('StatusTitleColor', '239,68,68,255')
+        Bang('StatusTitleWeight', '700')
+        Bang('StatusRightText', "")
+    elseif state == "JAIL" and stateLeft > 0 then
+        Bang('StatusTitleText', "?? In jail for " .. FormatTimeHHMMSS(stateLeft))
+        Bang('StatusFontSize', '11')
+        Bang('StatusY', '31')
+        Bang('HideTravel', '1')
+        Bang('HideNormal', '0')
+        Bang('TravelPct', 0)
+        Bang('StatusTitleColor', '249,115,22,255')
+        Bang('StatusTitleWeight', '700')
+        Bang('StatusRightText', "")
+    else
+        local loc = "TORN CITY"
+        local stateDesc = api.state_desc or ""
+        if stateDesc:match("^In (.+)$") then
+            loc = stateDesc:match("^In (.+)$")
+        elseif stateDesc ~= "" and stateDesc ~= "Okay" then
+            loc = stateDesc
+        end
+        Bang('StatusTitleText', "Okay // " .. string.upper(loc))
+        Bang('StatusFontSize', '9')
+        Bang('StatusY', '26')
+        Bang('StatusRightText', state)
+        Bang('HideTravel', '1')
+        Bang('HideNormal', '0')
+        Bang('TravelPct', 0)
+        Bang('StatusTitleColor', '100,116,139,255')
+        Bang('StatusTitleWeight', '400')
+    end
+
+    -- Energy
+    local eCur = tonumber(api.energy.current) or 0
+    local eMax = tonumber(api.energy.maximum) or 0
+    local eLeft = math.max(0, (tonumber(api.energy.fulltime) or 0) - elapsed)
+    Bang('EnergyPct', Pct(eCur, eMax))
+    Bang('EnergyValStr', FormatNumber(eCur) .. " / " .. FormatNumber(eMax) .. (eCur > eMax and " OVER" or ""))
+    Bang('EnergyFullText', (eCur >= eMax or eLeft <= 0) and "" or ("Full in " .. FormatTimeHM(eLeft)))
+    Bang('EnergyStatusAlpha', (eCur >= eMax) and "255" or "100")
+    Bang('EnergyTooltip', (eCur >= eMax) and (FormatNumber(eCur) .. " / " .. FormatNumber(eMax)) or (FormatNumber(eCur) .. " / " .. FormatNumber(eMax) .. "#CRLF#Full in " .. FormatTimeHM(eLeft)))
+    Bang('EnergyStatusAlpha', (eCur >= eMax) and "255" or "100")
+    Bang('EnergyTooltip', (eCur >= eMax) and (FormatNumber(eCur) .. " / " .. FormatNumber(eMax)) or (FormatNumber(eCur) .. " / " .. FormatNumber(eMax) .. "#CRLF#Full in " .. FormatTimeHM(eLeft)))
+
+    -- Nerve (no tick countdown)
+    local nCur = tonumber(api.nerve.current) or 0
+    local nMax = tonumber(api.nerve.maximum) or 0
+    local nLeft = math.max(0, (tonumber(api.nerve.fulltime) or 0) - elapsed)
+    
+    Bang('NervePct', Pct(nCur, nMax))
+    Bang('NerveValStr', FormatNumber(nCur) .. " / " .. FormatNumber(nMax))
+    if nCur >= nMax then
+        Bang('NerveFullText', "")
+    else
+        Bang('NerveFullText', "Full in " .. FormatTimeHM(nLeft))
+    end
+    Bang('NerveStatusAlpha', (nCur >= nMax) and "255" or "100")
+    Bang('NerveTooltip', (nCur >= nMax) and (FormatNumber(nCur) .. " / " .. FormatNumber(nMax)) or (FormatNumber(nCur) .. " / " .. FormatNumber(nMax) .. "#CRLF#Full in " .. FormatTimeHM(nLeft)))
+    Bang('NerveStatusAlpha', (nCur >= nMax) and "255" or "100")
+    Bang('NerveTooltip', (nCur >= nMax) and (FormatNumber(nCur) .. " / " .. FormatNumber(nMax)) or (FormatNumber(nCur) .. " / " .. FormatNumber(nMax) .. "#CRLF#Full in " .. FormatTimeHM(nLeft)))
+
+    -- Life
+    local lCur = tonumber(api.life.current) or 0
+    local lMax = tonumber(api.life.maximum) or 0
+    local lLeft = math.max(0, (tonumber(api.life.fulltime) or 0) - elapsed)
+    Bang('LifePct', Pct(lCur, lMax))
+    Bang('LifeValStr', FormatNumber(lCur) .. " / " .. FormatNumber(lMax))
+    Bang('LifeTick', (lCur >= lMax or lLeft <= 0) and "" or ("Full in " .. FormatTimeHM(lLeft)))
+
+    -- Happy
+    local hCur = tonumber(api.happy.current) or 0
+    local hMax = tonumber(api.happy.maximum) or 0
+    Bang('HappyPct', Pct(hCur, hMax))
+    Bang('HappyValStr', FormatNumber(hCur) .. " / " .. FormatNumber(hMax))
+
+    -- Cooldowns
+    local dLeft = math.max(0, (tonumber(api.cooldowns.drug) or 0) - elapsed)
+    Bang('DrugTime', FormatTimeHHMMSS(dLeft))
+    Bang('DrugGlowAlpha', dLeft <= 0 and "255" or "0")
+    Bang('DrugStatusAlpha', dLeft <= 0 and "255" or "100")
+    Bang('DrugTooltip', dLeft <= 0 and "Drug: Ready" or ("Drug CD#CRLF#" .. FormatTimeHHMMSS(dLeft)))
+
+    local bLeft = math.max(0, (tonumber(api.cooldowns.booster) or 0) - elapsed)
+    Bang('BoostTime', FormatTimeHHMMSS(bLeft))
+    Bang('BoostGlowAlpha', bLeft <= 0 and "255" or "0")
+    Bang('BoostStatusAlpha', bLeft <= 0 and "255" or "100")
+    Bang('BoostTooltip', bLeft <= 0 and "Booster: Ready" or ("Booster CD#CRLF#" .. FormatTimeHHMMSS(bLeft)))
+
+    local mLeft = math.max(0, (tonumber(api.cooldowns.medical) or 0) - elapsed)
+    Bang('MedTime', FormatTimeHHMMSS(mLeft))
+    Bang('MedGlowAlpha', mLeft <= 0 and "255" or "0")
+    Bang('MedStatusAlpha', mLeft <= 0 and "255" or "100")
+    Bang('MedTooltip', mLeft <= 0 and "Medical: Ready" or ("Medical CD#CRLF#" .. FormatTimeHHMMSS(mLeft)))
+end
+
+
+
+
+
+ 
+ 
